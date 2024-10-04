@@ -344,7 +344,7 @@ export async function activate(context: vscode.ExtensionContext) {
         try {
             await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
-                title: "Scanning Apigee Proxy with CodeSent SAST...",
+                title: "Scanning Apigee Proxy with CodeSent",
                 cancellable: false
             }, async (progress) => {
                 outputChannel.appendLine('Starting scan process...');
