@@ -1,54 +1,62 @@
 import * as vscode from 'vscode';
-import archiver from 'archiver'; // Default import
-import * as fs from 'fs-extra';
-import * as path from 'path';
-import * as os from 'os';
+import archiver from 'archiver';
+import * as stream from 'stream';
 import axios from 'axios';
-import FormData from 'form-data'; // Import FormData
+import FormData from 'form-data';
 
 /**
- * Compresses the specified directory into a ZIP file stored in a temporary location.
+ * Compresses the specified directory into a ZIP archive and returns it as a Buffer.
  * @param source Directory path to compress.
- * @param outPath Output path for the ZIP file.
+ * @returns Promise resolving to a Buffer containing the ZIP archive.
  */
-async function zipDirectory(source: string, outPath: string): Promise<void> {
+async function zipDirectoryToBuffer(source: string): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-        const output = fs.createWriteStream(outPath);
         const archive = archiver('zip', { zlib: { level: 9 } });
+        const passthrough = new stream.PassThrough();
+        const chunks: Buffer[] = [];
 
-        output.on('close', () => resolve());
         archive.on('error', (err) => reject(err));
 
-        archive.pipe(output);
+        passthrough.on('data', (chunk) => chunks.push(chunk));
+        passthrough.on('end', () => resolve(Buffer.concat(chunks)));
+
         archive.directory(source, false);
+        archive.pipe(passthrough);
         archive.finalize();
     });
 }
 
 /**
- * Uploads the ZIP file to the CodeSent API.
- * @param zipPath Path to the ZIP file.
+ * Uploads the ZIP archive buffer to the CodeSent API.
+ * @param zipBuffer Buffer containing the ZIP archive.
  * @param apiUrl Base URL of the CodeSent API.
  * @param apiKey API key for authorization.
- * @returns Proxy UUID as a string.
+ * @returns Promise resolving to the Proxy UUID.
  */
-async function uploadZip(zipPath: string, apiUrl: string, apiKey: string): Promise<string> {
+async function uploadZip(zipBuffer: Buffer, apiUrl: string, apiKey: string): Promise<string> {
     const formData = new FormData();
-    formData.append('file', fs.createReadStream(zipPath));
+    formData.append('file', zipBuffer, {
+        filename: 'proxy.zip',
+        contentType: 'application/zip',
+    });
 
     const response = await axios.post(`${apiUrl}/upload`, formData, {
         headers: {
             'Authorization': `Bearer ${apiKey}`,
             ...formData.getHeaders(),
+        },
+        validateStatus: function (status) {
+            return true; // Resolve all HTTP status codes
         }
     });
 
     if (response.status === 200) {
         const proxyUuid = response.data.proxy_uuid;
-        vscode.window.showInformationMessage(`File uploaded successfully. Proxy UUID: ${proxyUuid}`);
         return proxyUuid;
+    } else if (response.status === 401) {
+        throw new Error(`Invalid API Key`);
     } else {
-        const errorMessage = response.data.response || 'Unknown error';
+        const errorMessage = response.data.error || 'Unknown error';
         throw new Error(`File upload failed: ${errorMessage}`);
     }
 }
@@ -58,21 +66,25 @@ async function uploadZip(zipPath: string, apiUrl: string, apiKey: string): Promi
  * @param proxyUuid Proxy UUID obtained from the upload.
  * @param apiUrl Base URL of the CodeSent API.
  * @param apiKey API key for authorization.
- * @returns Task UUID as a string.
+ * @returns Promise resolving to the Task UUID.
  */
 async function validateProxy(proxyUuid: string, apiUrl: string, apiKey: string): Promise<string> {
     const response = await axios.post(`${apiUrl}/${proxyUuid}/validate`, {}, {
         headers: {
             'Authorization': `Bearer ${apiKey}`,
+        },
+        validateStatus: function (status) {
+            return true; // Resolve all HTTP status codes
         }
     });
 
     if (response.status === 200) {
         const taskUuid = response.data.task_uuid;
-        vscode.window.showInformationMessage(`Validation initiated. Task UUID: ${taskUuid}`);
         return taskUuid;
+    } else if (response.status === 401) {
+        throw new Error(`Invalid API Key`);
     } else {
-        const errorMessage = response.data.response || 'Unknown error';
+        const errorMessage = response.data.error || 'Unknown error';
         throw new Error(`Validation initiation failed: ${errorMessage}`);
     }
 }
@@ -83,20 +95,25 @@ async function validateProxy(proxyUuid: string, apiUrl: string, apiKey: string):
  * @param taskUuid Task UUID.
  * @param apiUrl Base URL of the CodeSent API.
  * @param apiKey API key for authorization.
- * @returns Current status as a string.
+ * @returns Promise resolving to the current status.
  */
 async function checkStatus(proxyUuid: string, taskUuid: string, apiUrl: string, apiKey: string): Promise<string> {
     const response = await axios.post(`${apiUrl}/${proxyUuid}/${taskUuid}/status`, {}, {
         headers: {
             'Authorization': `Bearer ${apiKey}`,
+        },
+        validateStatus: function (status) {
+            return true; // Resolve all HTTP status codes
         }
     });
 
     if (response.status === 200) {
         const status = response.data.status;
         return status;
+    } else if (response.status === 401) {
+        throw new Error(`Invalid API Key`);
     } else {
-        const errorMessage = response.data.response || 'Unknown error';
+        const errorMessage = response.data.error || 'Unknown error';
         throw new Error(`Status check failed: ${errorMessage}`);
     }
 }
@@ -107,61 +124,107 @@ async function checkStatus(proxyUuid: string, taskUuid: string, apiUrl: string, 
  * @param taskUuid Task UUID.
  * @param apiUrl Base URL of the CodeSent API.
  * @param apiKey API key for authorization.
- * @returns Validation results.
+ * @returns Promise resolving to the validation results.
  */
 async function getResults(proxyUuid: string, taskUuid: string, apiUrl: string, apiKey: string): Promise<any> {
     const response = await axios.post(`${apiUrl}/${proxyUuid}/${taskUuid}/results`, {}, {
         headers: {
             'Authorization': `Bearer ${apiKey}`,
+        },
+        validateStatus: function (status) {
+            return true; // Resolve all HTTP status codes
         }
     });
 
     if (response.status === 200) {
         const results = response.data;
         return results;
+    } else if (response.status === 401) {
+        throw new Error(`Invalid API Key`);
     } else {
-        const errorMessage = response.data.response || 'Unknown error';
+        const errorMessage = response.data.error || 'Unknown error';
         throw new Error(`Results retrieval failed: ${errorMessage}`);
     }
 }
 
 /**
- * Displays the SAST report in a Webview panel.
+ * Opens the SAST report URL in the default external browser.
  * @param reportUrl URL of the online report.
  */
-async function showReport(reportUrl: string) {
-    const panel = vscode.window.createWebviewPanel(
-        'sastReport',
-        'SAST Report',
-        vscode.ViewColumn.One,
-        { enableScripts: true }
-    );
+async function openReportInBrowser(reportUrl: string) {
+    const uri = vscode.Uri.parse(reportUrl);
+    await vscode.env.openExternal(uri);
+}
 
-    panel.webview.html = `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <title>SAST Report</title>
-            <style>
-                body, html {
-                    margin: 0;
-                    padding: 0;
-                    height: 100%;
-                    width: 100%;
-                }
-                iframe {
-                    border: none;
-                    width: 100%;
-                    height: 100%;
-                }
-            </style>
-        </head>
-        <body>
-            <iframe src="${reportUrl}"></iframe>
-        </body>
-        </html>
-    `;
+/**
+ * Checks if the current workspace is an Apigee project based on detection rules.
+ * @returns Promise resolving to true if Apigee project is detected, else false.
+ */
+async function isApigeeProject(): Promise<boolean> {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders) {
+        return false;
+    }
+
+    const workspacePath = workspaceFolders[0].uri.fsPath;
+
+    // 1. Check if 'apiproxy' folder exists at the root
+    const apiproxyPath = vscode.Uri.joinPath(vscode.Uri.file(workspacePath), 'apiproxy');
+    const apiproxyExists = await folderExists(apiproxyPath);
+
+    if (apiproxyExists) {
+        return true;
+    }
+
+    // 2. If 'apiproxy' doesn't exist, assume current workspace is inside 'apiproxy' and check for 'proxies' folder
+    const proxiesPath = vscode.Uri.joinPath(vscode.Uri.file(workspacePath), 'proxies');
+    const proxiesExists = await folderExists(proxiesPath);
+
+    return proxiesExists;
+}
+
+/**
+ * Checks if a folder exists at the given URI.
+ * @param uri URI of the folder to check.
+ * @returns Promise resolving to true if folder exists, else false.
+ */
+async function folderExists(uri: vscode.Uri): Promise<boolean> {
+    try {
+        const stat = await vscode.workspace.fs.stat(uri);
+        return stat.type === vscode.FileType.Directory;
+    } catch (error) {
+        return false;
+    }
+}
+
+/**
+ * Retrieves the API Key from Secret Storage.
+ * @returns Promise resolving to the API Key string or undefined.
+ */
+async function getApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
+    const storedApiKey = await context.secrets.get('codesentScanner.apiKey');
+    return storedApiKey;
+}
+
+/**
+ * Prompts the user to input the API Key and stores it securely.
+ * @returns Promise resolving to the API Key string or undefined.
+ */
+async function promptForApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
+    const apiKey = await vscode.window.showInputBox({
+        prompt: 'Enter your CodeSent API Key',
+        password: true, // Masks the input
+        ignoreFocusOut: true,
+    });
+
+    if (apiKey) {
+        await context.secrets.store('codesentScanner.apiKey', apiKey);
+        vscode.window.showInformationMessage('API Key stored successfully.');
+        return apiKey;
+    } else {
+        vscode.window.showErrorMessage('API Key entry was canceled.');
+        return undefined;
+    }
 }
 
 /**
@@ -175,50 +238,131 @@ export async function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('CodeSent for Apigee');
     context.subscriptions.push(outputChannel);
 
-    // Function to get the API Key from Secret Storage
-    async function getApiKey(): Promise<string | undefined> {
-        const storedApiKey = await context.secrets.get('codesentScanner.apiKey');
-        return storedApiKey;
+    // Variable to hold the status bar item
+    let statusBarItem: vscode.StatusBarItem | undefined;
+
+    // Flag to track if the scan prompt has been shown
+    let hasPromptedScan = false;
+
+    /**
+     * Creates and shows the status bar item.
+     */
+    function showStatusBarItem() {
+        if (!statusBarItem) {
+            statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 1);
+            statusBarItem.text = '$(search) Scan Apigee Proxy';
+            statusBarItem.tooltip = 'Scan Apigee Proxy with CodeSent';
+            statusBarItem.command = 'codesentScanner.scanProxy';
+            statusBarItem.show();
+            context.subscriptions.push(statusBarItem);
+            outputChannel.appendLine('Status bar item created.');
+        }
     }
 
-    // Register the main scan command
+    /**
+     * Hides and disposes the status bar item.
+     */
+    function hideStatusBarItem() {
+        if (statusBarItem) {
+            statusBarItem.hide();
+            statusBarItem.dispose();
+            statusBarItem = undefined;
+            outputChannel.appendLine('Status bar item disposed.');
+        }
+    }
+
+    /**
+     * Initializes the extension by checking if the workspace is an Apigee project.
+     */
+    async function initialize() {
+        const isApigee = await isApigeeProject();
+        outputChannel.appendLine(`Apigee project detected: ${isApigee}`);
+        if (isApigee) {
+            showStatusBarItem();
+
+            if (!hasPromptedScan) {
+                const message = 'Apigee proxy detected. Do you want to perform a CodeSent scan?';
+                const options: string[] = ['Start Scan'];
+
+                const selected = await vscode.window.showInformationMessage(message, ...options);
+
+                if (selected === 'Start Scan') {
+                    outputChannel.appendLine('User opted to start the scan.');
+                    await vscode.commands.executeCommand('codesentScanner.scanProxy');
+                } else {
+                    outputChannel.appendLine('User declined to start the scan.');
+                }
+
+                hasPromptedScan = true;
+            }
+        } else {
+            hideStatusBarItem();
+            hasPromptedScan = false;
+        }
+    }
+
+    // Listen for workspace folder changes
+    const workspaceChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+        outputChannel.appendLine('Workspace folders changed. Re-evaluating project type...');
+        await initialize();
+    });
+
+    context.subscriptions.push(workspaceChangeDisposable);
+
+    /**
+     * Registers the 'Scan Apigee Proxy with CodeSent' command.
+     */
     let scanProxyDisposable = vscode.commands.registerCommand('codesentScanner.scanProxy', async () => {
-        const apiKey = await getApiKey();
+        outputChannel.appendLine('scanProxy command invoked.');
+
+        let apiKey = await getApiKey(context);
+
         if (!apiKey) {
-            vscode.window.showErrorMessage('API key is not set. Please set it using the "CodeSent: Set API Key" command.');
-            outputChannel.appendLine('Scan aborted: API key not set.');
-            return;
+            outputChannel.appendLine('API Key not found. Prompting user to enter it.');
+            // Prompt the user to enter the API Key if it's not set
+            apiKey = await promptForApiKey(context);
+            if (!apiKey) {
+                // If the user cancels the input, abort the command
+                outputChannel.appendLine('User canceled API Key entry. Aborting scan.');
+                return;
+            }
         }
 
         const apiUrl = vscode.workspace.getConfiguration('codesentScanner').get<string>('baseUrl', 'https://codesent.io/api/scan/v1');
+        outputChannel.appendLine(`Using API URL: ${apiUrl}`);
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
-            vscode.window.showErrorMessage('No workspace folder found.');
-            outputChannel.appendLine('Scan aborted: No workspace folder.');
+            vscode.window.showErrorMessage('No workspace folder is open.');
+            outputChannel.appendLine('Scan aborted: No workspace folder is open.');
             return;
         }
 
         const workspacePath = workspaceFolders[0].uri.fsPath;
-        const zipPath = path.join(os.tmpdir(), 'proxy.zip');
+        outputChannel.appendLine(`Workspace Path: ${workspacePath}`);
 
         try {
-            vscode.window.withProgress({
+            await vscode.window.withProgress({
                 location: vscode.ProgressLocation.Notification,
                 title: "Scanning Apigee Proxy with CodeSent SAST...",
                 cancellable: false
             }, async (progress) => {
-                progress.report({ message: "Zipping the proxy directory..." });
-                outputChannel.appendLine('Zipping the proxy directory...');
-                await zipDirectory(workspacePath, zipPath);
+                outputChannel.appendLine('Starting scan process...');
+                
+                progress.report({ message: "Creating ZIP archive..." });
+                outputChannel.appendLine('Creating ZIP archive...');
+                const zipBuffer = await zipDirectoryToBuffer(workspacePath);
+                outputChannel.appendLine('ZIP archive created successfully.');
 
-                progress.report({ message: "Uploading ZIP file..." });
-                outputChannel.appendLine('Uploading ZIP file...');
-                const proxyUuid = await uploadZip(zipPath, apiUrl, apiKey);
+                progress.report({ message: "Uploading ZIP archive..." });
+                outputChannel.appendLine('Uploading ZIP archive...');
+                const proxyUuid = await uploadZip(zipBuffer, apiUrl, apiKey);
+                outputChannel.appendLine(`ZIP archive uploaded. Proxy UUID: ${proxyUuid}`);
 
                 progress.report({ message: "Initiating validation..." });
                 outputChannel.appendLine('Initiating validation...');
                 const taskUuid = await validateProxy(proxyUuid, apiUrl, apiKey);
+                outputChannel.appendLine(`Validation initiated. Task UUID: ${taskUuid}`);
 
                 // Periodically check the status
                 let status = '';
@@ -237,10 +381,27 @@ export async function activate(context: vscode.ExtensionContext) {
                 progress.report({ message: "Retrieving validation results..." });
                 outputChannel.appendLine('Retrieving validation results...');
                 const results = await getResults(proxyUuid, taskUuid, apiUrl, apiKey);
+                outputChannel.appendLine('Validation results retrieved.');
 
-                // Display the report to the user
-                await showReport(results.online_report);
-                vscode.window.showInformationMessage('SAST scan completed successfully.');
+                // Show a notification with action buttons
+                const reportUrl: string = results.online_report;
+                const message = 'SAST scan completed successfully.';
+                const options: string[] = ['Copy Report URL', 'Open in Browser'];
+
+                const selected = await vscode.window.showInformationMessage(message, ...options);
+                outputChannel.appendLine(`User selected option: ${selected}`);
+
+                if (selected === 'Copy Report URL') {
+                    await vscode.env.clipboard.writeText(reportUrl);
+                    vscode.window.showInformationMessage('Report URL copied to clipboard.');
+                    outputChannel.appendLine('Report URL copied to clipboard.');
+                } else if (selected === 'Open in Browser') {
+                    await openReportInBrowser(reportUrl);
+                    vscode.window.showInformationMessage('Report opened in browser.');
+                    outputChannel.appendLine('Report opened in browser.');
+                }
+
+                // Log completion
                 outputChannel.appendLine('SAST scan completed successfully.');
             });
         } catch (error: any) {
@@ -257,21 +418,19 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showErrorMessage(`An error occurred: ${error.message}`);
                 outputChannel.appendLine(`An error occurred: ${error.message}`);
             }
-        } finally {
-            // Remove the temporary ZIP file
-            await fs.remove(zipPath);
-            outputChannel.appendLine('Temporary ZIP file removed.');
         }
     });
 
     context.subscriptions.push(scanProxyDisposable);
 
-    // Register the set API key command
+    /**
+     * Registers the 'Set CodeSent API Key' command.
+     */
     let setApiKeyDisposable = vscode.commands.registerCommand('codesentScanner.setApiKey', async () => {
         const apiKey = await vscode.window.showInputBox({
             prompt: 'Enter your CodeSent API Key',
             password: true, // Masks the input
-            ignoreFocusOut: true
+            ignoreFocusOut: true,
         });
 
         if (apiKey) {
@@ -279,21 +438,45 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('API Key stored successfully.');
             outputChannel.appendLine('API Key stored successfully.');
         } else {
-            vscode.window.showErrorMessage('API Key entry canceled.');
-            outputChannel.appendLine('API Key entry canceled.');
+            vscode.window.showErrorMessage('API Key entry was canceled.');
+            outputChannel.appendLine('API Key entry was canceled.');
         }
     });
 
     context.subscriptions.push(setApiKeyDisposable);
 
-    // Create a status bar item
-    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    statusBarItem.text = '$(search) Scan Apigee Proxy'; // Icon and text
-    statusBarItem.tooltip = 'Scan Apigee Proxy with CodeSent SAST';
-    statusBarItem.command = 'codesentScanner.scanProxy';
-    statusBarItem.show();
+    /**
+     * Registers the 'Delete CodeSent API Key' command.
+     */
+    let deleteApiKeyDisposable = vscode.commands.registerCommand('codesentScanner.deleteApiKey', async () => {
+        const apiKey = await getApiKey(context);
+        if (!apiKey) {
+            vscode.window.showInformationMessage('API Key is not set.');
+            outputChannel.appendLine('Delete operation: No API Key to delete.');
+            return;
+        }
 
-    context.subscriptions.push(statusBarItem);
+        const confirm = await vscode.window.showWarningMessage(
+            'Are you sure you want to delete your CodeSent API Key?',
+            { modal: true },
+            'Yes',
+            'No'
+        );
+
+        if (confirm === 'Yes') {
+            await context.secrets.delete('codesentScanner.apiKey');
+            vscode.window.showInformationMessage('API Key has been deleted.');
+            outputChannel.appendLine('API Key has been deleted.');
+        } else {
+            vscode.window.showInformationMessage('API Key deletion canceled.');
+            outputChannel.appendLine('API Key deletion canceled.');
+        }
+    });
+
+    context.subscriptions.push(deleteApiKeyDisposable);
+    
+    // Initial check when the extension is activated
+    await initialize();
 }
 
 /**

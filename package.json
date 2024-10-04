@@ -9,19 +9,27 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:apiproxy/**"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "menus": {
       "commandPalette": [
         {
           "command": "codesentScanner.scanProxy",
-          "when": "editorTextFocus",
+          "title": "CodeSent: Scan",
           "group": "1_modification"
         },
         {
           "command": "codesentScanner.setApiKey",
           "title": "CodeSent: Set API Key",
+          "group": "2_configuration"
+        },
+        {
+          "command": "codesentScanner.deleteApiKey",
+          "title": "CodeSent: Delete API Key",
           "group": "2_configuration"
         }
       ]
@@ -31,17 +39,21 @@
         "command": "codesentScanner.scanProxy",
         "group": "navigation",
         "when": "editorTextFocus",
-        "alt": "Scan Apigee Proxy"
+        "alt": "CodeSent: Scan"
       }
     ],
     "commands": [
       {
         "command": "codesentScanner.scanProxy",
-        "title": "Scan Apigee Proxy with CodeSent"
+        "title": "CodeSent: Scan"
       },
       {
         "command": "codesentScanner.setApiKey",
         "title": "CodeSent: Set API Key"
+      },
+      {
+        "command": "codesentScanner.deleteApiKey",
+        "title": "CodeSent: Delete API Key"
       }
     ],
     "configuration": {
