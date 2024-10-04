@@ -7,9 +7,9 @@
 	"configurations": [
 		{
 			"name": "Run Extension",
-			"type": "node",
+			"type": "extensionHost",
 			"request": "launch",
-			"program": "${workspaceFolder}/dist/extension.js",
+            "runtimeExecutable": "${execPath}",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}"
 			],
@@ -17,6 +17,16 @@
 				"${workspaceFolder}/dist/**/*.js"
 			],
 			"preLaunchTask": "${defaultBuildTask}"
-		}
+		},
+        {
+            "type": "node",
+            "request": "attach",
+            "name": "Attach to Extension Host",
+            "port": 5870,
+            "restart": true,
+            "outFiles": [
+                "${workspaceRoot}/out"
+            ]
+        }
 	]
 }

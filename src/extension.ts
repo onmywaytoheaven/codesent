@@ -168,20 +168,34 @@ async function showReport(reportUrl: string) {
  * Activates the extension.
  * @param context Extension context.
  */
-export function activate(context: vscode.ExtensionContext) {
-    let disposable = vscode.commands.registerCommand('codesentScanner.scanProxy', async () => {
-        const config = vscode.workspace.getConfiguration('codesentScanner');
-        const apiKey = config.get<string>('apiKey');
-        const apiUrl = config.get<string>('baseUrl', 'https://codesent.io/api/scan/v1');
+export async function activate(context: vscode.ExtensionContext) {
+    console.log('CodeSent for Apigee extension is now active!');
 
+    // Create an Output Channel for logging
+    const outputChannel = vscode.window.createOutputChannel('CodeSent for Apigee');
+    context.subscriptions.push(outputChannel);
+
+    // Function to get the API Key from Secret Storage
+    async function getApiKey(): Promise<string | undefined> {
+        const storedApiKey = await context.secrets.get('codesentScanner.apiKey');
+        return storedApiKey;
+    }
+
+    // Register the main scan command
+    let scanProxyDisposable = vscode.commands.registerCommand('codesentScanner.scanProxy', async () => {
+        const apiKey = await getApiKey();
         if (!apiKey) {
-            vscode.window.showErrorMessage('API key is not set. Please configure it in the CodeSent for Apigee settings.');
+            vscode.window.showErrorMessage('API key is not set. Please set it using the "CodeSent: Set API Key" command.');
+            outputChannel.appendLine('Scan aborted: API key not set.');
             return;
         }
+
+        const apiUrl = vscode.workspace.getConfiguration('codesentScanner').get<string>('baseUrl', 'https://codesent.io/api/scan/v1');
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
             vscode.window.showErrorMessage('No workspace folder found.');
+            outputChannel.appendLine('Scan aborted: No workspace folder.');
             return;
         }
 
@@ -195,18 +209,22 @@ export function activate(context: vscode.ExtensionContext) {
                 cancellable: false
             }, async (progress) => {
                 progress.report({ message: "Zipping the proxy directory..." });
+                outputChannel.appendLine('Zipping the proxy directory...');
                 await zipDirectory(workspacePath, zipPath);
 
                 progress.report({ message: "Uploading ZIP file..." });
+                outputChannel.appendLine('Uploading ZIP file...');
                 const proxyUuid = await uploadZip(zipPath, apiUrl, apiKey);
 
                 progress.report({ message: "Initiating validation..." });
+                outputChannel.appendLine('Initiating validation...');
                 const taskUuid = await validateProxy(proxyUuid, apiUrl, apiKey);
 
                 // Periodically check the status
                 let status = '';
                 while (true) {
                     status = await checkStatus(proxyUuid, taskUuid, apiUrl, apiKey);
+                    outputChannel.appendLine(`Current status: ${status}`);
                     if (status.toLowerCase() === 'done') {
                         break;
                     } else if (['failed', 'error'].includes(status.toLowerCase())) {
@@ -217,21 +235,56 @@ export function activate(context: vscode.ExtensionContext) {
                 }
 
                 progress.report({ message: "Retrieving validation results..." });
+                outputChannel.appendLine('Retrieving validation results...');
                 const results = await getResults(proxyUuid, taskUuid, apiUrl, apiKey);
 
                 // Display the report to the user
                 await showReport(results.online_report);
                 vscode.window.showInformationMessage('SAST scan completed successfully.');
+                outputChannel.appendLine('SAST scan completed successfully.');
             });
         } catch (error: any) {
-            vscode.window.showErrorMessage(`An error occurred: ${error.message}`);
+            if (error.response) {
+                // Server responded with a status other than 2xx
+                vscode.window.showErrorMessage(`Server Error: ${error.response.data.message || error.message}`);
+                outputChannel.appendLine(`Server Error: ${error.response.data.message || error.message}`);
+            } else if (error.request) {
+                // No response received
+                vscode.window.showErrorMessage('No response from the server. Please check your internet connection.');
+                outputChannel.appendLine('No response from the server. Please check your internet connection.');
+            } else {
+                // Other errors
+                vscode.window.showErrorMessage(`An error occurred: ${error.message}`);
+                outputChannel.appendLine(`An error occurred: ${error.message}`);
+            }
         } finally {
             // Remove the temporary ZIP file
             await fs.remove(zipPath);
+            outputChannel.appendLine('Temporary ZIP file removed.');
         }
     });
 
-    context.subscriptions.push(disposable);
+    context.subscriptions.push(scanProxyDisposable);
+
+    // Register the set API key command
+    let setApiKeyDisposable = vscode.commands.registerCommand('codesentScanner.setApiKey', async () => {
+        const apiKey = await vscode.window.showInputBox({
+            prompt: 'Enter your CodeSent API Key',
+            password: true, // Masks the input
+            ignoreFocusOut: true
+        });
+
+        if (apiKey) {
+            await context.secrets.store('codesentScanner.apiKey', apiKey);
+            vscode.window.showInformationMessage('API Key stored successfully.');
+            outputChannel.appendLine('API Key stored successfully.');
+        } else {
+            vscode.window.showErrorMessage('API Key entry canceled.');
+            outputChannel.appendLine('API Key entry canceled.');
+        }
+    });
+
+    context.subscriptions.push(setApiKeyDisposable);
 
     // Create a status bar item
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);

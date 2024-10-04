@@ -9,9 +9,7 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onCommand:codesentScanner.scanProxy"
-  ],
+  "activationEvents": [],
   "main": "./dist/extension.js",
   "contributes": {
     "menus": {
@@ -20,6 +18,11 @@
           "command": "codesentScanner.scanProxy",
           "when": "editorTextFocus",
           "group": "1_modification"
+        },
+        {
+          "command": "codesentScanner.setApiKey",
+          "title": "CodeSent: Set API Key",
+          "group": "2_configuration"
         }
       ]
     },
@@ -35,18 +38,16 @@
       {
         "command": "codesentScanner.scanProxy",
         "title": "Scan Apigee Proxy with CodeSent"
+      },
+      {
+        "command": "codesentScanner.setApiKey",
+        "title": "CodeSent: Set API Key"
       }
     ],
     "configuration": {
       "type": "object",
       "title": "CodeSent for Apigee",
       "properties": {
-        "codesentScanner.apiKey": {
-          "type": "string",
-          "description": "API key for CodeSent SAST Scanner",
-          "default": "",
-          "secret": true
-        },
         "codesentScanner.baseUrl": {
           "type": "string",
           "description": "Base URL for CodeSent SAST Scanner API",
@@ -56,18 +57,13 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "compile": "npm run check-types && node esbuild.js",
+    "check-types": "tsc --noEmit",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
-    "compile-tests": "tsc -p . --outDir out",
-    "watch-tests": "tsc -p . -w --outDir out",
-    "pretest": "npm run compile-tests && npm run compile && npm run lint",
-    "check-types": "tsc --noEmit",
-    "lint": "eslint src",
-    "test": "vscode-test"
+    "vscode:prepublish": "npm run package",
+    "package": "npm run check-types && node esbuild.js --production"
   },
   "devDependencies": {
     "@types/archiver": "latest",
